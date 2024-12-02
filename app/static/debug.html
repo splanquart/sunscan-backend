@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live View - Sunscan</title>
+    <style>
+        #controls {
+            margin-bottom: 20px;
+        }
+        .control-field {
+            margin: 10px 0;
+        }
+        #response {
+            margin-top: 20px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            background-color: #f0f0f0;
+            padding: 10px;
+            border: 1px solid #ccc;
+        }
+        #status {
+            margin-top: 10px;
+            font-weight: bold;
+        }
+        #normalize-buttons {
+            margin-top: 20px;
+        }
+        .normalize-button {
+            padding: 10px 20px;
+            margin-right: 5px;
+            border: 1px solid #ccc;
+            background-color: #f0f0f0;
+            cursor: pointer;
+        }
+        .normalize-button.active {
+            background-color: #007bff;
+            color: #fff;
+            border: 1px solid #007bff;
+        }
+        .color-indicator {
+            width: 100px;
+            height: 50px;
+            border: 1px solid #ccc;
+        }
+        .color-rgb {
+            background: linear-gradient(to right, red, orange, yellow, green, blue, indigo, violet);
+        }
+        .color-red {
+            background-color: red;
+        }
+        .color-green {
+            background-color: green;
+        }
+        .color-blue {
+            background-color: blue;
+        }
+        .restart-button {
+            background-color: #dc3545;
+        }
+    </style>
+</head>
+<body>
+    <h1>Live View</h1>
+    <div id="connection-info">
+        Connexion au serveur : <span id="connection-hostname">...</span>
+    </div>
+    <div id="controls">
+        <button id="connect-button">Connecter</button>
+        <button id="disconnect-button">Déconnecter</button>
+        <div id="status">Statut : <span id="camera-status">...</span></div>
+        <div class="control-field">
+            <label for="exposure">Exposition (0.1 à 10000.0) :</label>
+            <input type="number" id="exposure" min="0.1" max="10000.0" step="0.1" value="80">
+        </div>
+        <div class="control-field">
+            <label for="gain">Gain (1.0 à 10.0) :</label>
+            <input type="number" id="gain" min="1.0" max="10.0" step="0.1" value="1.0">
+        </div>
+        <button id="apply-controls">Appliquer</button>
+        <div id="normalize-buttons">
+            <button class="normalize-button" data-normalization="0">Mode 0</button>
+            <button class="normalize-button" data-normalization="1">Mode 1</button>
+            <button class="normalize-button" data-normalization="2">Mode 2</button>
+        </div>
+        <div class="control-field">
+            <button id="toggle-color-mode">Switch</button>
+            <div id="color-indicator" class="color-indicator"></div>
+        </div>
+        <div class="control-field">
+            <button id="restart-rpi" class="restart-button">Redémarrer</button>
+        </div>
+    </div>
+    <div id="live-view">
+        <img id="live-image" src="" alt="Image en direct" style="max-width: 100%; border: 1px solid #000;">
+    </div>
+    <div id="response">
+        <strong>Réponse du serveur :</strong>
+        <pre id="response-text">...</pre>
+    </div>
+    
+    <script>
+        // Adresse de votre WebSocket
+        //const hostname = window.location.hostname;
+        //const hostname = "10.42.0.1";
+        const hostname = "192.168.1.30";
+        
+        const statusUrl = `http://${hostname}:8000/camera/status`;
+        const connectUrl = `http://${hostname}:8000/camera/imx477/connect`;
+        const disconnectUrl = `http://${hostname}:8000/camera/disconnect`;
+        const cameraStatusElement = document.getElementById("camera-status");
+        const controlsUrl = `http://${hostname}:8000/camera/controls/`;
+        const normalizeUrl = (mode) => `http://${hostname}:8000/camera/toggle-normalize/${mode}`;
+        const toggleMonobinModeUrl = `http://${hostname}:8000/camera/toggle-monobin-mode/`;
+        const restartUrl = `http://${hostname}:8000/sunscan/reboot`;
+
+        const websocketUrl = `ws://${hostname}:8000/ws`;
+        let socket = null;
+
+        // Référencement de l'élément image
+        const liveImage = document.getElementById("live-image");
+        const responseText = document.getElementById("response-text");
+        const connectionInfoElement = document.getElementById("connection-hostname");
+        const normalizeButtons = document.querySelectorAll(".normalize-button");
+        const colorIndicator = document.getElementById("color-indicator");
+
+        // Display the hostname/IP in the UI
+        connectionInfoElement.textContent = hostname;
+        
+        // Mise à jour du statut de la caméra
+        async function updateStatus() {
+            try {
+                const response = await fetch(statusUrl);
+                if (response.ok) {
+                    const data = await response.json();
+                    cameraStatusElement.textContent = data.camera_status;
+                    // Update the color indicator based on server state
+                    if (data.monobin_mode !== undefined) {
+                        updateColorIndicator(data.monobin_mode);
+                    }
+                } else {
+                    console.error("Erreur lors de la récupération du statut.");
+                    cameraStatusElement.textContent = "Erreur";
+                }
+            } catch (error) {
+                console.error("Erreur réseau :", error);
+                cameraStatusElement.textContent = "Erreur réseau";
+            }
+        }
+
+         // Connecter la caméra
+         async function connectCamera() {
+            try {
+                const response = await fetch(connectUrl);
+                if (response.ok) {
+                    const data = await response.json();
+                    cameraStatusElement.textContent = data.camera_status;
+                    if (data.camera_status === "connected") {
+                        startWebSocket();
+                    }
+                } else {
+                    console.error("Erreur lors de la connexion.");
+                }
+            } catch (error) {
+                console.error("Erreur réseau :", error);
+            }
+        }
+
+        // Déconnecter la caméra
+        async function disconnectCamera() {
+            try {
+                const response = await fetch(disconnectUrl);
+                if (response.ok) {
+                    const data = await response.json();
+                    cameraStatusElement.textContent = data.camera_status;
+                    if (data.camera_status === "disconnected") {
+                        stopWebSocket();
+                    }
+                } else {
+                    console.error("Erreur lors de la déconnexion.");
+                }
+            } catch (error) {
+                console.error("Erreur réseau :", error);
+            }
+        }
+
+        // Gérer WebSocket
+        function startWebSocket() {
+            //const websocketUrl = `ws://${hostname}:8000/live-view`; // Adaptez l'URL si nécessaire
+            socket = new WebSocket(websocketUrl);
+
+            socket.addEventListener("open", () => {
+                console.log("Connexion WebSocket établie.");
+            });
+
+            socket.addEventListener("message", (event) => {
+                try {
+                    const message = event.data; // Message brut
+                    if (message.startsWith("camera;#;")) {
+                        const parts = message.split(";#;");
+                        if (parts.length >= 4) {
+                            const base64Image = parts[3];
+                            //liveImage.src = ""; // Libère l'ancienne image avant d'en charger une nouvelle
+                            liveImage.src = base64Image;
+                        }
+                    }
+                } catch (error) {
+                    console.error("Erreur lors du traitement du message:", error);
+                }
+            });
+
+            socket.addEventListener("error", (error) => {
+                console.error("Erreur WebSocket:", error);
+            });
+
+            socket.addEventListener("close", () => {
+                console.log("Connexion WebSocket fermée.");
+            });
+        }
+        function stopWebSocket() {
+            if (socket) {
+                socket.close();
+                socket = null;
+            }
+        }
+
+        // Fonction pour appliquer les contrôles
+        async function applyControls() {
+            const exposureValue = parseFloat(document.getElementById("exposure").value);
+            const gainValue = parseFloat(document.getElementById("gain").value);
+
+            if (
+                isNaN(exposureValue) || exposureValue < 0.1 || exposureValue > 10000.0 ||
+                isNaN(gainValue) || gainValue < 1.0 || gainValue > 10.0
+            ) {
+                alert("Les valeurs saisies ne sont pas valides.");
+                return;
+            }
+
+            const payload = {
+                exp: exposureValue,
+                gain: gainValue
+            };
+
+            try {
+                const response = await fetch(controlsUrl, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Erreur HTTP : ${response.status}`);
+                }
+
+                const responseData = await response.json();
+                responseText.textContent = JSON.stringify(responseData, null, 2);
+            } catch (error) {
+                console.error("Erreur réseau :", error);
+                responseText.textContent = "Erreur : Impossible d'appliquer les contrôles.";
+            }
+        }
+
+         // Function to update normalization mode
+         async function updateNormalization(mode) {
+            try {
+                const response = await fetch(normalizeUrl(mode), {
+                    method: "GET",
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Erreur HTTP : ${response.status}`);
+                }
+
+                const responseData = await response.json();
+                responseText.textContent = JSON.stringify(responseData, null, 2);
+
+                // Update button states
+                normalizeButtons.forEach((button) => {
+                    if (button.dataset.normalization === mode.toString()) {
+                        button.classList.add("active");
+                    } else {
+                        button.classList.remove("active");
+                    }
+                });
+            } catch (error) {
+                console.error("Erreur réseau :", error);
+                responseText.textContent = "Erreur : Impossible de changer le mode de normalisation.";
+            }
+        }
+        
+        // Function to toggle color mode
+        async function toggleColorMode() {
+            try {
+                const response = await fetch(toggleMonobinModeUrl);
+                if (!response.ok) {
+                    throw new Error(`Erreur HTTP : ${response.status}`);
+                }
+
+                const responseData = await response.json();
+                responseText.textContent = JSON.stringify(responseData, null, 2);
+
+                // Update the color indicator
+                updateColorIndicator(responseData.monobin_mode);
+            } catch (error) {
+                console.error("Erreur réseau :", error);
+                responseText.textContent = "Erreur : Impossible de changer le canal de couleur.";
+            }
+        }
+
+        // Update the color indicator based on the mode
+        function updateColorIndicator(mode) {
+            colorIndicator.className = "color-indicator"; // Reset classes
+            switch (mode) {
+                case 0:
+                    colorIndicator.classList.add("color-rgb");
+                    break;
+                case 1:
+                    colorIndicator.classList.add("color-red");
+                    break;
+                case 2:
+                    colorIndicator.classList.add("color-green");
+                    break;
+                case 3:
+                    colorIndicator.classList.add("color-blue");
+                    break;
+                default:
+                    console.error("Mode inconnu :", mode);
+            }
+        }
+
+        // Function to restart the Raspberry Pi
+        async function restartRpi() {
+            if (!confirm("Êtes-vous sûr de vouloir redémarrer le Raspberry Pi ? Cette action ne peut pas être annulée.")) {
+                return; // Abort if the user cancels
+            }
+
+            try {
+                const response = await fetch(restartUrl, { method: "POST" });
+                if (!response.ok) {
+                    throw new Error(`Erreur HTTP : ${response.status}`);
+                }
+
+                const responseData = await response.json();
+                responseText.textContent = JSON.stringify(responseData, null, 2);
+                alert("Le Raspberry Pi est en cours de redémarrage.");
+            } catch (error) {
+                console.error("Erreur réseau :", error);
+                responseText.textContent = "Erreur : Impossible de redémarrer le Raspberry Pi.";
+            }
+        }
+
+        document.getElementById("connect-button").addEventListener("click", connectCamera);
+        document.getElementById("disconnect-button").addEventListener("click", disconnectCamera);
+        document.getElementById("apply-controls").addEventListener("click", applyControls);
+        document.getElementById("toggle-color-mode").addEventListener("click", toggleColorMode);
+        // Attach click events to normalization buttons
+        normalizeButtons.forEach((button) => {
+            button.addEventListener("click", () => {
+                const mode = button.dataset.normalization;
+                updateNormalization(mode);
+            });
+        });
+        document.getElementById("restart-rpi").addEventListener("click", restartRpi);
+
+        // Vérifier le statut au chargement de la page
+        updateStatus();
+        // Set default normalization mode on page load
+        updateNormalization(1); // Default to mode 1
+    </script>
+</body>
+</html>

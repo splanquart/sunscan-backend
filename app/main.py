@@ -807,3 +807,10 @@ def get_first_image_thumbnail(date_folder, scan_folder=None):
             if file.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.ser', '.txt')): # todo : extract to a main list?
                 return f"/images/{os.path.relpath(os.path.join(root, file), SCANS_DIR)}"
     return None
+
+
+# Serve the webapp for debugging
+app.mount("/static", StaticFiles(directory="static"), name="static")
+@app.get("/debug")
+def read_live_view():
+    return FileResponse("static/debug.html")
