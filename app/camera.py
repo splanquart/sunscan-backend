@@ -20,6 +20,12 @@ def getMaxAduValue(array):
     return np.max(array)
 
 class IMX477Camera_CSI():
+    def __new__(cls):
+        # prevent multiple instances of the camera
+        if not hasattr(cls, 'instance'):
+            cls.instance = super(IMX477Camera_CSI, cls).__new__(cls)
+        return cls.instance
+
     def __init__(self):
         """Initialize the IMX477 camera with default settings."""
         self._picam2 = None
@@ -49,7 +55,6 @@ class IMX477Camera_CSI():
         contrast_algo["ce_enable"] = 0
         contrast_algo["gamma_curve"] = [0, 0, 65535, 65535]
         self._picam2 = Picamera2(tuning=tuning)
-
         
         mode = self._picam2.sensor_modes[3]
   
