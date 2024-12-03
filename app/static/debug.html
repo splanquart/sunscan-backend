@@ -58,6 +58,35 @@
         .restart-button {
             background-color: #dc3545;
         }
+        .snapshot-button {
+            background-color: #28a745;
+        }
+        .record-button {
+            background-color: #dc3545;
+            color: white;
+        }
+        .stop-button {
+            background-color: #007bff;
+            color: white;
+        }
+        .icon-circle {
+            width: 16px;
+            height: 16px;
+            background-color: white;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 10px;
+        }
+        .icon-square {
+            width: 16px;
+            height: 16px;
+            background-color: white;
+            display: inline-block;
+            margin-right: 10px;
+        }
+        .shutdown-button {
+            background-color: #343a40;
+        }
     </style>
 </head>
 <body>
@@ -88,7 +117,28 @@
             <div id="color-indicator" class="color-indicator"></div>
         </div>
         <div class="control-field">
+            <button id="take-snapshot" class="snapshot-button">
+                <i class="camera-icon">📷</i> Prendre un Snapshot
+            </button>    
+        </div>
+        <div class="control-field">
+            <button id="start-record" class="record-button">
+                <span class="icon-circle"></span>Démarrer Enregistrement
+            </button>
+        </div>
+        <div class="control-field">
+            <button id="stop-record" class="stop-button">
+                <span class="icon-square"></span>Arrêter Enregistrement
+            </button>
+        </div>
+        <div class="control-field">
+            <button id="recreate-websocket">Recréer WebSocket</button>
+        </div>
+        <div id="status">WebSocket : <span id="websocket-status">...</span></div>
+        <div class="control-field">
             <button id="restart-rpi" class="restart-button">Redémarrer</button>
+            <button id="shutdown-rpi" class="shutdown-button">Shutdown</button>
+
         </div>
     </div>
     <div id="live-view">
@@ -113,9 +163,13 @@
         const normalizeUrl = (mode) => `http://${hostname}:8000/camera/toggle-normalize/${mode}`;
         const toggleMonobinModeUrl = `http://${hostname}:8000/camera/toggle-monobin-mode/`;
         const restartUrl = `http://${hostname}:8000/sunscan/reboot`;
+        const shutdownUrl = `http://${hostname}:8000/sunscan/shutdown`;
+        const takeSnapshotUrl = `http://${hostname}:8000/camera/take-snapshot/`;
+        const startRecordUrl = `http://${hostname}:8000/camera/record/start/`;
+        const stopRecordUrl = `http://${hostname}:8000/camera/record/stop/`;
 
         const websocketUrl = `ws://${hostname}:8000/ws`;
-        let socket = null;
+        let socket;
 
         // Référencement de l'élément image
         const liveImage = document.getElementById("live-image");
@@ -123,6 +177,7 @@
         const connectionInfoElement = document.getElementById("connection-hostname");
         const normalizeButtons = document.querySelectorAll(".normalize-button");
         const colorIndicator = document.getElementById("color-indicator");
+        const websocketStatusElement = document.getElementById("websocket-status");
 
         // Display the hostname/IP in the UI
         connectionInfoElement.textContent = hostname;
@@ -186,10 +241,15 @@
 
         // Gérer WebSocket
         function startWebSocket() {
-            //const websocketUrl = `ws://${hostname}:8000/live-view`; // Adaptez l'URL si nécessaire
+            if (socket) {
+                socket.close(); // Close existing WebSocket if open
+            }
             socket = new WebSocket(websocketUrl);
+            // Update the WebSocket status
+            websocketStatusElement.textContent = "Connexion en cours...";
 
             socket.addEventListener("open", () => {
+                websocketStatusElement.textContent = "Connecté";
                 console.log("Connexion WebSocket établie.");
             });
 
@@ -210,10 +270,12 @@
             });
 
             socket.addEventListener("error", (error) => {
+                websocketStatusElement.textContent = "Erreur";
                 console.error("Erreur WebSocket:", error);
             });
 
             socket.addEventListener("close", () => {
+                websocketStatusElement.textContent = "Déconnecté";
                 console.log("Connexion WebSocket fermée.");
             });
         }
@@ -228,6 +290,7 @@
         async function applyControls() {
             const exposureValue = parseFloat(document.getElementById("exposure").value);
             const gainValue = parseFloat(document.getElementById("gain").value);
+            const maxVisuThreshold = 256;
 
             if (
                 isNaN(exposureValue) || exposureValue < 0.1 || exposureValue > 10000.0 ||
@@ -239,7 +302,8 @@
 
             const payload = {
                 exp: exposureValue,
-                gain: gainValue
+                gain: gainValue,
+                max_visu_threshold: maxVisuThreshold
             };
 
             try {
@@ -352,6 +416,90 @@
             }
         }
 
+        // Function to shut down the Raspberry Pi
+        async function shutdownRpi() {
+            if (!confirm("Êtes-vous sûr de vouloir éteindre le Raspberry Pi ? Cette action ne peut pas être annulée.")) {
+                return; // Abort if the user cancels
+            }
+
+            try {
+                const response = await fetch(shutdownUrl);
+                if (!response.ok) {
+                    throw new Error(`Erreur HTTP : ${response.status}`);
+                }
+
+                const responseData = await response.json();
+                responseText.textContent = JSON.stringify(responseData, null, 2);
+                alert("Le Raspberry Pi est en train de s'éteindre.");
+                actionStatusElement.textContent = "Shutdown en cours...";
+            } catch (error) {
+                console.error("Erreur réseau :", error);
+                responseText.textContent = "Erreur : Impossible d'éteindre le Raspberry Pi.";
+                actionStatusElement.textContent = "Erreur lors du shutdown.";
+            }
+        }
+
+        // Function to take a snapshot
+        async function takeSnapshot() {
+            try {
+                const response = await fetch(takeSnapshotUrl);
+                if (!response.ok) {
+                    throw new Error(`Erreur HTTP : ${response.status}`);
+                }
+
+                const responseData = await response.json();
+                responseText.textContent = JSON.stringify(responseData, null, 2);
+                alert("Snapshot capturé avec succès !");
+            } catch (error) {
+                console.error("Erreur réseau :", error);
+                responseText.textContent = "Erreur : Impossible de capturer le snapshot.";
+            }
+        }
+        
+        // Function to start recording
+        async function startRecording() {
+            try {
+                const response = await fetch(startRecordUrl);
+                if (!response.ok) {
+                    throw new Error(`Erreur HTTP : ${response.status}`);
+                }
+
+                const responseData = await response.json();
+                responseText.textContent = JSON.stringify(responseData, null, 2);
+                // Check the record state in the response
+                if (responseData.record === true) {
+                    alert("Enregistrement démarré !");
+                } else {
+                    alert("Enregistrement déjà en cours ou non démarré correctement.");
+                }
+            } catch (error) {
+                console.error("Erreur réseau :", error);
+                responseText.textContent = "Erreur : Impossible de démarrer l'enregistrement.";
+            }
+        }
+
+        // Function to stop recording
+        async function stopRecording() {
+            try {
+                const response = await fetch(stopRecordUrl);
+                if (!response.ok) {
+                    throw new Error(`Erreur HTTP : ${response.status}`);
+                }
+
+                const responseData = await response.json();
+                responseText.textContent = JSON.stringify(responseData, null, 2);
+                // Check the record state in the response
+                if (responseData.record === false) {
+                    alert("Enregistrement arrêté !");
+                } else {
+                    alert("Aucun enregistrement en cours à arrêter ou problème rencontré.");
+                }
+            } catch (error) {
+                console.error("Erreur réseau :", error);
+                responseText.textContent = "Erreur : Impossible d'arrêter l'enregistrement.";
+            }
+        }
+        
         document.getElementById("connect-button").addEventListener("click", connectCamera);
         document.getElementById("disconnect-button").addEventListener("click", disconnectCamera);
         document.getElementById("apply-controls").addEventListener("click", applyControls);
@@ -364,7 +512,14 @@
             });
         });
         document.getElementById("restart-rpi").addEventListener("click", restartRpi);
-
+        document.getElementById("shutdown-rpi").addEventListener("click", shutdownRpi);
+        document.getElementById("take-snapshot").addEventListener("click", takeSnapshot);
+        document.getElementById("start-record").addEventListener("click", startRecording);
+        document.getElementById("stop-record").addEventListener("click", stopRecording);
+        // Attach event to recreate WebSocket
+        document.getElementById("recreate-websocket").addEventListener("click", () => {
+            startWebSocket();
+        });
         // Vérifier le statut au chargement de la page
         updateStatus();
         // Set default normalization mode on page load
