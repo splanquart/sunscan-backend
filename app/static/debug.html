@@ -150,10 +150,13 @@
     </div>
     
     <script>
-        // Adresse de votre WebSocket
-        //const hostname = window.location.hostname;
-        //const hostname = "10.42.0.1";
-        const hostname = "192.168.1.30";
+        // Determine the hostname
+        //const fallbackHostname = "10.42.0.1";
+        const fallbackHostname = "192.168.1.30";
+        const currentUrl = window.location.href;
+        const hostname = currentUrl.startsWith("http")
+            ? window.location.hostname // Use the hostname from the current URL
+            : fallbackHostname; // Use the fallback hostname for local files
         
         const statusUrl = `http://${hostname}:8000/camera/status`;
         const connectUrl = `http://${hostname}:8000/camera/imx477/connect`;
