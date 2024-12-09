@@ -26,7 +26,56 @@ def is_battery_system_available():
         return False
 
 
-class MockPowerHelper:
+class VoltageCheckMixin:
+    """
+    A mixin class for checking the stability of the battery voltage.
+    Use only information from the Raspberry Pi's OS to check the voltage.
+
+    You can use it with all PowerHelper classes.
+    """
+    def is_voltage_stable(self):
+        """
+        Check the stability of the battery voltage.
+
+        This method runs a system command to get the battery voltage status.
+        If the output indicates a low voltage, it returns False and prints a warning.
+        Otherwise, it returns True and indicates that the voltage is stable.
+
+        Returns:
+            bool: True if the voltage is stable, False otherwise.
+        """
+        result = subprocess.run(['vcgencmd', 'get_throttled'], capture_output=True, text=True)
+        # Typical output is in the form: "throttled=0x0" or "throttled=0x50000" for low voltage
+        throttled = result.stdout.strip()
+        if "0x50000" in throttled:
+            print("⚠️ Low battery: Voltage too low detected!")
+            return False
+        else:
+            print("✅ Voltage stable")
+            return True
+
+    def cpu_core_voltage():
+        """
+        Get the voltage of the CPU core.
+        Typically, the core voltage is around 0.8V.
+
+        Returns:
+            float: The voltage of the CPU core, or None if an error occurs.
+        """
+        try:
+            # Execute the command to get the core voltage
+            result = subprocess.run(['vcgencmd', 'measure_volts', 'core'], 
+                                    capture_output=True, text=True, check=True)
+            # Typical output is in the form: "volt=0.8250V"
+            voltage_str = result.stdout.strip()
+            voltage_value = float(voltage_str.split('=')[1].replace('V', ''))
+            return voltage_value
+        except Exception as e:
+            print(f"Error retrieving voltage: {e}")
+            return None
+
+
+class MockPowerHelper(VoltageCheckMixin):
     def get_battery(self):
         return 42.0
     def battery_power_plugged(self):
@@ -37,7 +86,7 @@ class MockPowerHelper:
         pass
 
 
-class PowerHelper:
+class PowerHelper(VoltageCheckMixin):
     """A helper class for managing power-related functions."""
 
     def __init__(self):
