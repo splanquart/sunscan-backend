@@ -4,6 +4,21 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Live View - Sunscan</title>
+    <script src="js/chart.js"></script>
+    <style>
+        canvas {
+            width: 100%;
+            height: 100%;
+            border: 1px solid #ccc; /* Ajout d'une bordure légère */
+            box-shadow: 0px 2px 5px rgba(0, 0, 0, 0.1); /* Légère ombre pour esthétique */
+            background-color: #f9f9f9; /* Fond léger */
+        }
+        .chart-container {
+            width: 800px;
+            height: 400px;
+            margin-bottom: 30px; /* Espacement entre les graphiques */
+        }
+    </style>
     <style>
         #controls {
             margin-bottom: 20px;
@@ -87,6 +102,33 @@
         .shutdown-button {
             background-color: #343a40;
         }
+
+        #crop-controls {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 20px 0;
+        }
+
+        #crop-controls button {
+            width: 100px;
+            height: 40px;
+            margin: 5px 0;
+            font-size: 16px;
+            cursor: pointer;
+            border: 1px solid #ccc;
+            background-color: #f0f0f0;
+            transition: background-color 0.2s;
+        }
+
+        #crop-controls button:hover {
+            background-color: #e0e0e0;
+        }
+
+        #crop-controls button i {
+            font-style: normal;
+            font-size: 20px;
+        }
     </style>
 </head>
 <body>
@@ -97,6 +139,7 @@
     <div id="controls">
         <button id="connect-button">Connecter</button>
         <button id="disconnect-button">Déconnecter</button>
+        <button id="update-status">Mettre à jour le statut</button>
         <div id="status">Statut : <span id="camera-status">...</span></div>
         <div class="control-field">
             <label for="exposure">Exposition (0.1 à 10000.0) :</label>
@@ -138,11 +181,26 @@
         <div class="control-field">
             <button id="restart-rpi" class="restart-button">Redémarrer</button>
             <button id="shutdown-rpi" class="shutdown-button">Shutdown</button>
-
+            <button id="sunscan-infos">Sunscan Infos</button>
         </div>
+    </div>
+    <!-- Conteneur des boutons Crop -->
+    <h2>Contrôle du Crop</h2>
+    <div id="crop-controls">
+        <button id="crop-up"><i>&#x2191;</i></button> <!-- Flèche vers le haut -->
+        <button id="toggle-crop">Crop</button> <!-- Bouton texte "Crop" -->
+        <button id="crop-down"><i>&#x2193;</i></button> <!-- Flèche vers le bas -->
     </div>
     <div id="live-view">
         <img id="live-image" src="" alt="Image en direct" style="max-width: 100%; border: 1px solid #000;">
+    </div>
+    <h2>Graphique d'Intensité</h2>
+    <div class="chart-container">
+        <canvas id="intensityChart"></canvas>
+    </div>
+    <h2>Graphique Spectrum</h2>
+    <div class="chart-container">
+        <canvas id="spectrumChart"></canvas>
     </div>
     <div id="response">
         <strong>Réponse du serveur :</strong>
@@ -158,7 +216,7 @@
             ? window.location.hostname // Use the hostname from the current URL
             : fallbackHostname; // Use the fallback hostname for local files
         
-        const statusUrl = `http://${hostname}:8000/camera/status`;
+        const cameraStatusUrl = `http://${hostname}:8000/camera/status`;
         const connectUrl = `http://${hostname}:8000/camera/imx477/connect`;
         const disconnectUrl = `http://${hostname}:8000/camera/disconnect`;
         const cameraStatusElement = document.getElementById("camera-status");
@@ -167,13 +225,33 @@
         const toggleMonobinModeUrl = `http://${hostname}:8000/camera/toggle-monobin-mode/`;
         const restartUrl = `http://${hostname}:8000/sunscan/reboot`;
         const shutdownUrl = `http://${hostname}:8000/sunscan/shutdown`;
+        const infosUrl = `http://${hostname}:8000/sunscan/stats`;
         const takeSnapshotUrl = `http://${hostname}:8000/camera/take-snapshot/`;
         const startRecordUrl = `http://${hostname}:8000/camera/record/start/`;
         const stopRecordUrl = `http://${hostname}:8000/camera/record/stop/`;
+        const cropUpUrl = `http://${hostname}:8000/camera/crop/up/`;
+        const cropDownUrl = `http://${hostname}:8000/camera/crop/down/`;
+        const toggleCropUrl = `http://${hostname}:8000/camera/toggle-crop/`;
+
+
+        const ctx = document.getElementById("intensityChart").getContext("2d");
 
         const websocketUrl = `ws://${hostname}:8000/ws`;
         let socket;
 
+        async function sendRequest(url, buttonLabel) {
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`Erreur HTTP ${response.status}`);
+                const data = await response.json();
+                responseText.textContent = JSON.stringify(data, null, 2);
+                console.log(`Réponse ${buttonLabel} :`, data);
+            } catch (error) {
+                console.error(`Erreur lors de l'action ${buttonLabel}:`, error);
+                responseText.textContent = `Erreur : ${error.message}`;
+                alert(`Erreur : Impossible d'effectuer ${buttonLabel}.`);
+            }
+        }
         // Référencement de l'élément image
         const liveImage = document.getElementById("live-image");
         const responseText = document.getElementById("response-text");
@@ -184,11 +262,72 @@
 
         // Display the hostname/IP in the UI
         connectionInfoElement.textContent = hostname;
-        
+        // Créer un graphique d'intensité
+        const intensityChart = new Chart(ctx, {
+        type: "line",
+        data: {
+            labels: [], // Les indices des données (seront remplis dynamiquement)
+            datasets: [{
+                label: "Intensité",
+                data: [], // Les valeurs d'intensité
+                borderColor: "rgba(75, 192, 192, 1)",
+                backgroundColor: "rgba(75, 192, 192, 0.2)",
+                borderWidth: 1,
+                pointRadius: 0, // Pas de points sur la courbe pour un graphique fluide
+                fill: true, // Zone sous la courbe remplie
+            }],
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: {
+                    display: true,
+                    position: "top",
+                },
+            },
+            scales: {
+                x: {
+                    title: {
+                        display: true,
+                        text: "Échantillons",
+                    },
+                },
+                y: {
+                    title: {
+                        display: true,
+                        text: "Valeurs d'intensité",
+                    },
+                },
+            },
+        },
+    });
+        const ctxSpectrum = document.getElementById("spectrumChart").getContext("2d");
+        const spectrumChart = new Chart(ctxSpectrum, {
+            type: "line",
+            data: {
+                labels: [],
+                datasets: [{
+                    label: "Spectrum",
+                    data: [],
+                    borderColor: "rgba(255, 99, 132, 1)",
+                    backgroundColor: "rgba(255, 99, 132, 0.2)",
+                    borderWidth: 1,
+                    pointRadius: 0,
+                    fill: true,
+                }],
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    x: { title: { display: true, text: "Échantillons" } },
+                    y: { title: { display: true, text: "Valeurs spectrales" } }
+                },
+            },
+        });
         // Mise à jour du statut de la caméra
         async function updateStatus() {
             try {
-                const response = await fetch(statusUrl);
+                const response = await fetch(cameraStatusUrl);
                 if (response.ok) {
                     const data = await response.json();
                     cameraStatusElement.textContent = data.camera_status;
@@ -242,6 +381,45 @@
             }
         }
 
+        function updateLiveImage_blob(base64Image, liveImage) {
+            try {
+                // Convertir Base64 en Blob
+                const byteString = atob(base64Image.split(",")[1]);
+                const mimeString = base64Image.split(",")[0].split(":")[1].split(";")[0];
+                const ab = new ArrayBuffer(byteString.length);
+                const ia = new Uint8Array(ab);
+                for (let i = 0; i < byteString.length; i++) {
+                    ia[i] = byteString.charCodeAt(i);
+                }
+                const blob = new Blob([ab], { type: mimeString });
+
+                // Créer une URL pour le Blob
+                const objectURL = URL.createObjectURL(blob);
+
+                // Libérer l'ancienne URL pour éviter les fuites mémoire
+                if (liveImage.src.startsWith("blob:")) {
+                    URL.revokeObjectURL(liveImage.src);
+                }
+
+                // Charger la nouvelle image
+                liveImage.src = objectURL;
+            } catch (error) {
+                console.error("Erreur lors de la mise à jour de l'image live :", error);
+            }
+        }
+
+        function updateLiveImage_base64(base64Image, liveImage) {
+            try {
+                // Vérifie si l'image est différente de l'actuelle
+                if (liveImage.dataset.lastSrc !== base64Image) {
+                    liveImage.src = base64Image;
+                    liveImage.dataset.lastSrc = base64Image; // Stocke la dernière image dans un attribut personnalisé
+                }
+            } catch (error) {
+                console.error("Erreur lors de la mise à jour de l'image live :", error);
+            }
+        }
+
         // Gérer WebSocket
         function startWebSocket() {
             if (socket) {
@@ -265,7 +443,25 @@
                             const base64Image = parts[3];
                             //liveImage.src = ""; // Libère l'ancienne image avant d'en charger une nouvelle
                             liveImage.src = base64Image;
+                            //updateLiveImage_base64(base64Image, liveImage);
                         }
+                    } else if (message.startsWith("intensity;#;")) {
+                        const dataString = message.split(";#;")[1]; // Obtenir les valeurs après "intensity;#;"
+                        const intensityValues = dataString.split(",").map(Number); // Convertir en tableau de nombres
+
+                        // Mettre à jour les données du graphique
+                        intensityChart.data.labels = intensityValues.map((_, index) => index); // Créer des indices [0, 1, 2, ...]
+                        intensityChart.data.datasets[0].data = intensityValues;
+
+                        // Rafraîchir le graphique
+                        intensityChart.update();
+                    } else if (message.startsWith("spectrum;#;")) {
+                        const dataString = message.split(";#;")[1];
+                        const spectrumValues = dataString.split(",").map(Number);
+
+                        spectrumChart.data.labels = spectrumValues.map((_, index) => index);
+                        spectrumChart.data.datasets[0].data = spectrumValues;
+                        spectrumChart.update();
                     }
                 } catch (error) {
                     console.error("Erreur lors du traitement du message:", error);
@@ -503,8 +699,11 @@
             }
         }
         
+
+
         document.getElementById("connect-button").addEventListener("click", connectCamera);
         document.getElementById("disconnect-button").addEventListener("click", disconnectCamera);
+        document.getElementById("update-status").addEventListener("click", updateStatus);
         document.getElementById("apply-controls").addEventListener("click", applyControls);
         document.getElementById("toggle-color-mode").addEventListener("click", toggleColorMode);
         // Attach click events to normalization buttons
@@ -516,6 +715,7 @@
         });
         document.getElementById("restart-rpi").addEventListener("click", restartRpi);
         document.getElementById("shutdown-rpi").addEventListener("click", shutdownRpi);
+        document.getElementById("sunscan-infos").addEventListener("click", () => sendRequest(infosUrl, "Sunscan Infos"));
         document.getElementById("take-snapshot").addEventListener("click", takeSnapshot);
         document.getElementById("start-record").addEventListener("click", startRecording);
         document.getElementById("stop-record").addEventListener("click", stopRecording);
@@ -523,10 +723,13 @@
         document.getElementById("recreate-websocket").addEventListener("click", () => {
             startWebSocket();
         });
+        // Attachement des événements pour les boutons
+        document.getElementById("crop-up").addEventListener("click", () => sendRequest(cropUpUrl, "Crop Up"));
+        document.getElementById("crop-down").addEventListener("click", () => sendRequest(cropDownUrl, "Crop Down"));
+        document.getElementById("toggle-crop").addEventListener("click", () => sendRequest(toggleCropUrl, "Toggle Crop"));
+
         // Vérifier le statut au chargement de la page
         updateStatus();
-        // Set default normalization mode on page load
-        updateNormalization(1); // Default to mode 1
     </script>
 </body>
 </html>
