@@ -54,7 +54,7 @@ class VoltageCheckMixin:
             print("✅ Voltage stable")
             return True
 
-    def cpu_core_voltage():
+    def cpu_core_voltage(self):
         """
         Get the voltage of the CPU core.
         Typically, the core voltage is around 0.8V.
