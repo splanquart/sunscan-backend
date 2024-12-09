@@ -198,7 +198,7 @@ async def connect(request: Request):
     """
     du = get_available_size()
     
-    version = {'camera':current_camera, 'backend_api_version':BACKEND_API_VERSION, 'battery':power.get_battery(), 'battery_power_plugged':power.battery_power_plugged()}
+    version = {'camera':current_camera, 'backend_api_version':BACKEND_API_VERSION, 'battery':power.get_battery(), 'battery_power_plugged':power.battery_power_plugged(), 'is_voltage_stable': power.is_voltage_stable(), 'cpu_core_voltage': power.cpu_core_voltage()}
     return JSONResponse(content=jsonable_encoder(du | version))
 
 @app.get("/sunscan/scans", response_class=JSONResponse)
