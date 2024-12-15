@@ -809,8 +809,12 @@ def get_first_image_thumbnail(date_folder, scan_folder=None):
     return None
 
 
-# Serve the webapp for debugging
-app.mount("/static", StaticFiles(directory="static"), name="static")
+@app.get("/js/chart.js")
+def get_charts_js():
+    file_path = os.path.join("static", "js", "chart.js")
+    return FileResponse(file_path)
+
 @app.get("/debug")
 def read_live_view():
-    return FileResponse("static/debug.html")
+    file_path = os.path.join("static", "debug.html")
+    return FileResponse(file_path)
