@@ -85,6 +85,8 @@ def process_scan(serfile, callback, dopcont=False, autocrop=True, autocrop_size=
     except Exception as e:
         # If an error occurs during processing, print an error message
         print("error solex proc", e)
+        print(f"process_scan {serfile} failed")
+        print(f"Traceback: {e}")
         # Call the callback function to indicate failure
         callback(serfile, 'failed')
 
