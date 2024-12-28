@@ -6,6 +6,8 @@ from libcamera import controls
 from picamera2 import Picamera2, Controls
 from picamera2.platform import Platform
 from numba import jit
+from abc import ABC
+from abc import abstractmethod
 
 def getMaxAduValue(array):
     """
@@ -19,15 +21,30 @@ def getMaxAduValue(array):
     """
     return np.max(array)
 
-class IMX477Camera_CSI():
+class BaseIMX477Camera_CSI(ABC):
     def __new__(cls):
         # prevent multiple instances of the camera
         if not hasattr(cls, 'instance'):
             cls.instance = super(IMX477Camera_CSI, cls).__new__(cls)
         return cls.instance
 
-    def __init__(self):
-        """Initialize the IMX477 camera with default settings."""
+    def __init__(self, depth):
+        """
+        Initialize the IMX477 camera with default settings.
+
+        Parameters:
+            depth (int): The depth value for the camera data.
+
+        Attributes:
+            _picam2 (None): Placeholder for the Picamera2 object.
+            _cameraControls (None): Placeholder for camera control settings.
+            _name (str): The name of the camera model.
+            _bin (bool): Flag indicating whether binning is enabled.
+            _crop_height (int): The height of the crop area.
+            _max_adu (tuple): Maximum Analog-to-Digital Units (ADU) values.
+            _monobin_mode (int): Mode for monochrome binning.
+            data_depth (int): The depth value for the camera data.
+        """
         self._picam2 = None
         self._cameraControls = None
         self._name = "IMX477"
@@ -35,6 +52,8 @@ class IMX477Camera_CSI():
         self._crop_height = 220
         self._max_adu = (0,0,0)
         self._monobin_mode = 0
+        self.data_depth = depth
+        self.tuning_file_name = "imx477_scientific.json"
 
     def init(self):
         """
@@ -94,7 +113,33 @@ class IMX477Camera_CSI():
             bool: True if it's a color camera, False otherwise.
         """
         return True
-    
+
+    @abstractmethod
+    def process_max_adu(self, array: np.ndarray, offset: int, depth_conv: int) -> tuple[int, int, int]:
+        """
+        Process the maximum ADU values for each color channel.
+
+        Args:
+            array (numpy.ndarray): Input array of ADU values.
+            offset (int): Offset value for ADU calculation.
+            depth_conv (int): Depth conversion factor.
+
+        Returns:
+            tuple[int, int, int]: Maximum ADU values (red, green, blue) as 16-bit integers.
+        """
+        pass
+    @abstractmethod
+    def convert_bayer_to_rgb_16bit(self,  array: np.ndarray) -> np.ndarray:
+        """
+        Convert a Bayer pattern array to an RGB image in 16bits.
+
+        Args:
+            array (numpy.ndarray): Input Bayer pattern array.
+
+        Returns:
+            numpy.ndarray: Converted RGB image.
+        """
+        pass
     def capture(self, isRecording, withFlat=False):
         """
         Capture an image from the camera.
@@ -104,7 +149,7 @@ class IMX477Camera_CSI():
             withFlat (bool, optional): Whether to apply flat field correction. Defaults to False.
 
         Returns:
-            numpy.ndarray: Captured image as a 16-bit numpy array.
+            numpy.ndarray: Captured image as a 12-bit numpy array.
         """
         if not self._picam2:
             return  
@@ -120,29 +165,18 @@ class IMX477Camera_CSI():
 
         offset = 3200
         bin = 2
-        depth_conv = 4   
+        depth_conv = 4  # Raspberry Pi 4
+        depth_conv = 0.25 # Raspberry Pi 5 and later
 
         if not isRecording:
-            b = getMaxAduValue(array[:, 0::2][::2])-(offset/depth_conv/4)
-            g = getMaxAduValue(array[:, 0::2][1::2])-(offset/depth_conv/4)
-            r = getMaxAduValue(array[:, 1::2][1::2])-(offset/depth_conv/4)
-            self._max_adu = (r,g,b)
-        
+            self._max_adu = self.process_max_adu(array, offset, depth_conv)
+
         if self._monobin:
-            match self._monobin_mode: # for each case : convert 12-bit values to 16 bit
-                case 0:  # rgb monobin
-                    array_16bit = (bin2dBayer(np.array(array), bin) * depth_conv) - offset 
-                case 1:  # red layer
-                    array_16bit = (array[:, 1::2][1::2] * depth_conv) - offset/4
-                case 2:  # green layer
-                    array_16bit = (array[:, 0::2][1::2]+array[:, 1::2][::2] * depth_conv) - offset/4
-                case 3:  # blue layer
-                    array_16bit = (array[:, 0::2][::2] * depth_conv) - offset/4
-  
-            array_16bit[array_16bit>65535]=65535
-            frame = np.uint16(array_16bit)
+            array_16bit = self.process_monobin_mode(array, self._monobin_mode, bin, depth_conv, offset)
+            array_16bit[array_16bit>65535]=65535  # clip values to 16-bit
+            frame = np.uint16(array_16bit)  # cast to uint16
         else:
-            f = cv2.cvtColor(array * 16 , cv2.COLOR_BayerRGGB2RGB)
+            f = self.convert_bayer_to_rgb_16bit(array)
             height = f.shape[0]//4
             width = f.shape[1]//4
             r = cv2.resize(f, (width, height))
@@ -198,6 +232,121 @@ class IMX477Camera_CSI():
         self._monobin = options['monobin']
         self._monobin_mode = options['monobin_mode']
         self._bin = options['bin']
+
+
+
+
+class IMX477Camera_CSI_rpi4(BaseIMX477Camera_CSI):
+    def __init__(self):
+        super().__init__(12)
+        self.depth = 12
+        self.offset = 3200
+        self.tuning_file_name = "imx477_scientific.json"
+    def process_max_adu(self, array: np.ndarray, offset: int, depth_conv: int) -> tuple[int, int, int]:
+        """
+        Process the maximum ADU values for each color channel.
+
+        Args:
+            array (numpy.ndarray): Input array of ADU values.
+            offset (int): Offset value for ADU calculation.
+            depth_conv (int): Depth conversion factor.
+
+        Returns:
+            tuple[int, int, int]: Maximum ADU values (red, green, blue) as 12-bit integers.
+        """
+        offset = 3200
+        bin = 2
+        depth_conv = 4  # Raspberry Pi 4
+        b = getMaxAduValue(array[:, 0::2][::2]) - (offset / depth_conv / 4)
+        g = getMaxAduValue(array[:, 0::2][1::2]) - (offset / depth_conv / 4)
+        r = getMaxAduValue(array[:, 1::2][1::2]) - (offset / depth_conv / 4)
+        return (r, g, b)
+    def convert_bayer_to_rgb_16bit(self,  array: np.ndarray) -> np.ndarray:
+        """
+        Convert a Bayer pattern array to an RGB image.
+
+        Args:
+            array (numpy.ndarray): Input Bayer pattern array.
+
+        Returns:
+            numpy.ndarray: Converted RGB image.
+        """
+        return cv2.cvtColor(array * 16, cv2.COLOR_BayerRGGB2RGB)   
+    def process_monobin_mode(array, bin, monobin_mode, depth_conv, offset):
+        match monobin_mode: # for each case : convert 12-bit values to 16 bit
+            case 0:  # rgb monobin
+                array_16bit = (bin2dBayer(np.array(array), bin) * depth_conv) - offset 
+            case 1:  # red layer
+                array_16bit = (array[:, 1::2][1::2] * depth_conv) - offset/4
+            case 2:  # green layer
+                array_16bit = ((array[:, 0::2][1::2]+array[:, 1::2][::2]) * depth_conv/2) - offset/4
+            case 3:  # blue layer
+                array_16bit = (array[:, 0::2][::2] * depth_conv) - offset/4
+        return array_16bit
+
+
+class IMX477Camera_CSI_rpi5(BaseIMX477Camera_CSI):
+    def __init__(self):
+        super().__init__(16)
+        self.depth = 16
+        self.offset = 3200
+        self.tuning_file_name = "imx477_scientific_pisp.json"
+    def process_max_adu(self, array: np.ndarray, offset: int, depth_conv: int) -> tuple[int, int, int]:
+        """
+        Process the maximum ADU values for each color channel.
+
+        Args:
+            array (numpy.ndarray): Input array of ADU values.
+            offset (int): Offset value for ADU calculation.
+            depth_conv (int): Depth conversion factor.
+
+        Returns:
+            tuple[int, int, int]: Maximum ADU values (red, green, blue) as 12-bit integers.
+        """
+        offset = 3200
+        bin = 2
+        depth_conv = 4 # Raspberry Pi 5 and later
+        b = (getMaxAduValue(array[:, 0::2][::2]) - offset) / 16
+        g = (getMaxAduValue(array[:, 0::2][1::2]) - offset) / 16
+        r = (getMaxAduValue(array[:, 1::2][1::2]) - offset) / 16
+        return (r, g, b)
+    def convert_bayer_to_rgb_16bit(self, array: np.ndarray) -> np.ndarray:
+        """
+        Convert a Bayer pattern array to an RGB image.
+
+        Args:
+            array (numpy.ndarray): Input Bayer pattern array.
+
+        Returns:
+            numpy.ndarray: Converted RGB image.
+        """
+        return cv2.cvtColor(array, cv2.COLOR_BayerRGGB2RGB)  
+    def process_monobin_mode(array, bin, monobin_mode, depth_conv, offset):
+        match monobin_mode: # for each case : values is already in 16 bit
+            case 0:  # rgb monobin
+                array_16bit = bin2dBayer(np.array(array), bin) - offset 
+            case 1:  # red layer
+                array_16bit = array[:, 1::2][1::2] - offset/4
+            case 2:  # green layer
+                array_16bit = (array[:, 0::2][1::2]+array[:, 1::2][::2]) - offset/2
+            case 3:  # blue layer
+                array_16bit = array[:, 0::2][::2] - offset/4
+        return array_16bit
+
+
+def factory_imx477_camera_csi():
+    """
+    Factory function to create an IMX477 camera object based on the platform.
+
+    Returns:
+        BaseIMX477Camera_CSI: IMX477 camera object.
+    """
+    if Picamera2.platform == Platform.PISP:
+        print("Create Camera object for Raspberry Pi 5 and later")
+        return IMX477Camera_CSI_rpi5()
+    else:
+        print("Create Camera object for Raspberry Pi 4")
+        return IMX477Camera_CSI_rpi4()
 
 @jit(nopython=True)
 def bin2dBayer(a, K):
