@@ -8,6 +8,7 @@ from picamera2.platform import Platform
 from numba import jit
 from abc import ABC
 from abc import abstractmethod
+from image import AbstractImageRaw12BitColor, factory_image_raw
 
 def getMaxAduValue(array):
     """
@@ -25,7 +26,7 @@ class BaseIMX477Camera_CSI(ABC):
     def __new__(cls):
         # prevent multiple instances of the camera
         if not hasattr(cls, 'instance'):
-            cls.instance = super(IMX477Camera_CSI, cls).__new__(cls)
+            cls.instance = super(BaseIMX477Camera_CSI, cls).__new__(cls)
         return cls.instance
 
     def __init__(self, depth):
@@ -76,10 +77,17 @@ class BaseIMX477Camera_CSI(ABC):
         self._picam2 = Picamera2(tuning=tuning)
         
         mode = self._picam2.sensor_modes[3]
+        print("-----------------")
+        print(f"Sensor mode: {mode}")
+        print("-----------------")
   
         self._sensor_mode = 3
         self._sensor_size = (mode['size'][0],mode['size'][1])
-        video_config = self._picam2.create_video_configuration(buffer_count=10,sensor={'output_size': mode['size'], 'bit_depth':mode['bit_depth']}, raw={"format":"SRGGB12", 'size': mode['size']})
+        video_config = self._picam2.create_video_configuration(
+            buffer_count=10,
+            sensor={'output_size': mode['size'], 'bit_depth':mode['bit_depth']}, 
+            raw={"format":"SRGGB12", 'size': mode['size']}
+        )
         self._picam2.configure(video_config)
         self._picam2.set_controls({'HdrMode': controls.HdrModeEnum.Off})
         self._picam2.start()
@@ -114,32 +122,18 @@ class BaseIMX477Camera_CSI(ABC):
         """
         return True
 
-    @abstractmethod
-    def process_max_adu(self, array: np.ndarray, offset: int, depth_conv: int) -> tuple[int, int, int]:
-        """
-        Process the maximum ADU values for each color channel.
+    def process_monobin_mode(self, image: AbstractImageRaw12BitColor, bin, monobin_mode):
+        match monobin_mode:  # for each case: values are already in 16 bit
+            case 0:  # rgb monobin
+                array_16bit = image.convert_to_grayscale()
+            case 1:  # red layer
+                array_16bit = image.channel_red()
+            case 2:  # green layer
+                array_16bit = image.channel_green()
+            case 3:  # blue layer
+                array_16bit = image.channel_blue()
+        return array_16bit
 
-        Args:
-            array (numpy.ndarray): Input array of ADU values.
-            offset (int): Offset value for ADU calculation.
-            depth_conv (int): Depth conversion factor.
-
-        Returns:
-            tuple[int, int, int]: Maximum ADU values (red, green, blue) as 16-bit integers.
-        """
-        pass
-    @abstractmethod
-    def convert_bayer_to_rgb_16bit(self,  array: np.ndarray) -> np.ndarray:
-        """
-        Convert a Bayer pattern array to an RGB image in 16bits.
-
-        Args:
-            array (numpy.ndarray): Input Bayer pattern array.
-
-        Returns:
-            numpy.ndarray: Converted RGB image.
-        """
-        pass
     def capture(self, isRecording, withFlat=False):
         """
         Capture an image from the camera.
@@ -154,29 +148,28 @@ class BaseIMX477Camera_CSI(ABC):
         if not self._picam2:
             return  
         
-        array = self._picam2.capture_array('raw').view(np.uint16)
+        array = self.capture_raw_image()
+        
+        image = factory_image_raw(array)
 
-        # Crop the image
-        crop_x = 0
+        # Crop the image        
         if self._crop:
-            array = array[self._crop_y:self._crop_y+self._crop_height,crop_x:crop_x+self._sensor_size[0]]
+            image = image.crop(0, self._crop_y, self._sensor_size[0], self._crop_height)
         else:
-            array = array[self._preview_crop_y:self._preview_crop_y+self._preview_crop_height,crop_x:crop_x+self._sensor_size[0]] 
-
-        offset = 3200
-        bin = 2
-        depth_conv = 4  # Raspberry Pi 4
-        depth_conv = 0.25 # Raspberry Pi 5 and later
+            image = image.crop(0, self._preview_crop_y, self._sensor_size[0], self._preview_crop_height)
 
         if not isRecording:
-            self._max_adu = self.process_max_adu(array, offset, depth_conv)
+            self._max_adu = image.calculate_max_adu()
 
         if self._monobin:
-            array_16bit = self.process_monobin_mode(array, self._monobin_mode, bin, depth_conv, offset)
+            # mono image output
+            array_16bit = self.process_monobin_mode(image, bin=2, monobin_mode=self._monobin_mode)
             array_16bit[array_16bit>65535]=65535  # clip values to 16-bit
             frame = np.uint16(array_16bit)  # cast to uint16
+
         else:
-            f = self.convert_bayer_to_rgb_16bit(array)
+            # color image output
+            f = image.to_rgb_16bit()
             height = f.shape[0]//4
             width = f.shape[1]//4
             r = cv2.resize(f, (width, height))
@@ -234,107 +227,45 @@ class BaseIMX477Camera_CSI(ABC):
         self._bin = options['bin']
 
 
-
-
 class IMX477Camera_CSI_rpi4(BaseIMX477Camera_CSI):
     def __init__(self):
         super().__init__(12)
         self.depth = 12
-        self.offset = 3200
+        self.offset = 3200  # 800 ADU par channel in 12-bit, computed to reduce the black level to 70 to 80 ADU. Need by some version of INTI
         self.tuning_file_name = "imx477_scientific.json"
-    def process_max_adu(self, array: np.ndarray, offset: int, depth_conv: int) -> tuple[int, int, int]:
+    def capture_raw_image(self):
         """
-        Process the maximum ADU values for each color channel.
-
-        Args:
-            array (numpy.ndarray): Input array of ADU values.
-            offset (int): Offset value for ADU calculation.
-            depth_conv (int): Depth conversion factor.
+        Capture a raw image from the camera and extract the 12 most significant bits.
 
         Returns:
-            tuple[int, int, int]: Maximum ADU values (red, green, blue) as 12-bit integers.
+            numpy.ndarray: Captured raw image as a 12-bit numpy array.
         """
-        offset = 3200
-        bin = 2
-        depth_conv = 4  # Raspberry Pi 4
-        b = getMaxAduValue(array[:, 0::2][::2]) - (offset / depth_conv / 4)
-        g = getMaxAduValue(array[:, 0::2][1::2]) - (offset / depth_conv / 4)
-        r = getMaxAduValue(array[:, 1::2][1::2]) - (offset / depth_conv / 4)
-        return (r, g, b)
-    def convert_bayer_to_rgb_16bit(self,  array: np.ndarray) -> np.ndarray:
-        """
-        Convert a Bayer pattern array to an RGB image.
+        return self._picam2.capture_array('raw').view(np.uint16)
 
-        Args:
-            array (numpy.ndarray): Input Bayer pattern array.
-
-        Returns:
-            numpy.ndarray: Converted RGB image.
-        """
-        return cv2.cvtColor(array * 16, cv2.COLOR_BayerRGGB2RGB)   
-    def process_monobin_mode(array, bin, monobin_mode, depth_conv, offset):
-        match monobin_mode: # for each case : convert 12-bit values to 16 bit
-            case 0:  # rgb monobin
-                array_16bit = (bin2dBayer(np.array(array), bin) * depth_conv) - offset 
-            case 1:  # red layer
-                array_16bit = (array[:, 1::2][1::2] * depth_conv) - offset/4
-            case 2:  # green layer
-                array_16bit = ((array[:, 0::2][1::2]+array[:, 1::2][::2]) * depth_conv/2) - offset/4
-            case 3:  # blue layer
-                array_16bit = (array[:, 0::2][::2] * depth_conv) - offset/4
-        return array_16bit
 
 
 class IMX477Camera_CSI_rpi5(BaseIMX477Camera_CSI):
     def __init__(self):
         super().__init__(16)
         self.depth = 16
-        self.offset = 3200
+        self.offset = 800
         self.tuning_file_name = "imx477_scientific_pisp.json"
-    def process_max_adu(self, array: np.ndarray, offset: int, depth_conv: int) -> tuple[int, int, int]:
+    def capture_raw_image(self):
         """
-        Process the maximum ADU values for each color channel.
-
-        Args:
-            array (numpy.ndarray): Input array of ADU values.
-            offset (int): Offset value for ADU calculation.
-            depth_conv (int): Depth conversion factor.
+        Capture a raw image from the camera and extract the 12 most significant bits.
 
         Returns:
-            tuple[int, int, int]: Maximum ADU values (red, green, blue) as 12-bit integers.
+            numpy.ndarray: Captured raw image as a 12-bit numpy array.
         """
-        offset = 3200
-        bin = 2
-        depth_conv = 4 # Raspberry Pi 5 and later
-        b = (getMaxAduValue(array[:, 0::2][::2]) - offset) / 16
-        g = (getMaxAduValue(array[:, 0::2][1::2]) - offset) / 16
-        r = (getMaxAduValue(array[:, 1::2][1::2]) - offset) / 16
-        return (r, g, b)
-    def convert_bayer_to_rgb_16bit(self, array: np.ndarray) -> np.ndarray:
-        """
-        Convert a Bayer pattern array to an RGB image.
+        raw_array = self._picam2.capture_array('raw').view(np.uint16)
 
-        Args:
-            array (numpy.ndarray): Input Bayer pattern array.
-
-        Returns:
-            numpy.ndarray: Converted RGB image.
-        """
-        return cv2.cvtColor(array, cv2.COLOR_BayerRGGB2RGB)  
-    def process_monobin_mode(array, bin, monobin_mode, depth_conv, offset):
-        match monobin_mode: # for each case : values is already in 16 bit
-            case 0:  # rgb monobin
-                array_16bit = bin2dBayer(np.array(array), bin) - offset 
-            case 1:  # red layer
-                array_16bit = array[:, 1::2][1::2] - offset/4
-            case 2:  # green layer
-                array_16bit = (array[:, 0::2][1::2]+array[:, 1::2][::2]) - offset/2
-            case 3:  # blue layer
-                array_16bit = array[:, 0::2][::2] - offset/4
-        return array_16bit
+        # Extract the 12 most significant bits
+        raw_array_12bit = (raw_array >> 4).astype(np.uint16)
+        return raw_array_12bit
 
 
-def factory_imx477_camera_csi():
+
+def factory_imx477_camera_csi() -> BaseIMX477Camera_CSI:
     """
     Factory function to create an IMX477 camera object based on the platform.
 

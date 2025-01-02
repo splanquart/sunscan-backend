@@ -233,7 +233,8 @@ async def connect(request: Request):
     Returns:
         JSONResponse: A JSON object indicating the camera's connection status.
     """
-    app.cameraController = CameraController(IMX477Camera_CSI())
+    camera = factory_imx477_camera_csi()
+    app.cameraController = CameraController(camera)
     if app.cameraController.getStatus() != "connected":
         app.cameraController.start()
     return JSONResponse(content=jsonable_encoder({"camera_status":app.cameraController.getStatus()}))
