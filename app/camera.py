@@ -125,7 +125,7 @@ class BaseIMX477Camera_CSI(ABC):
     def process_monobin_mode(self, image: AbstractImageRaw12BitColor, bin, monobin_mode):
         match monobin_mode:  # for each case: values are already in 16 bit
             case 0:  # rgb monobin
-                array_16bit = image.convert_to_grayscale()
+                array_16bit = image.bin2d()
             case 1:  # red layer
                 array_16bit = image.channel_red()
             case 2:  # green layer
@@ -279,21 +279,6 @@ def factory_imx477_camera_csi() -> BaseIMX477Camera_CSI:
         print("Create Camera object for Raspberry Pi 4")
         return IMX477Camera_CSI_rpi4()
 
-@jit(nopython=True)
-def bin2dBayer(a, K):
-    """
-    Perform 2D binning on a Bayer pattern array.
-
-    Args:
-        a (numpy.ndarray): Input Bayer pattern array.
-        K (int): Binning factor.
-
-    Returns:
-        numpy.ndarray: Binned array.
-    """
-    m_bins = a.shape[0]//K
-    n_bins = a.shape[1]//K
-    return a.reshape(m_bins, K, n_bins, K).sum(3).sum(1)
 
 @jit(nopython=True)
 def clip_and_cast(arr):

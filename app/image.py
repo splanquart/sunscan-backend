@@ -3,6 +3,7 @@ from abc import ABC
 import cv2
 import numpy as np
 from picamera2 import Picamera2, Platform
+from numba import jit
 
 class AbstractImageRaw12BitColor(ABC):
     def __init__(self, array: np.ndarray):
@@ -40,6 +41,18 @@ class AbstractImageRaw12BitColor(ABC):
         grayscale = (red + green + blue) / 3
         
         return grayscale.astype(np.uint16)
+
+    def bin2d(self) -> np.ndarray:
+        """
+        Perform 2D binning on the image.
+
+        Args:
+            binning_factor (int): The binning factor.
+
+        Returns:
+            numpy.ndarray: Binned image.
+        """
+        return bin2dBayer(np.array(self.array), 2)
 
     def to_rgb_16bit(self):
         """
@@ -156,8 +169,23 @@ def factory_image_raw(array: np.ndarray) -> AbstractImageRaw12BitColor:
         AbstractImageRaw12BitColor: ImageRaw object.
     """
     if Picamera2.platform == Platform.PISP:
-        print("Create ImageRaw object for Raspberry Pi 5 and later")
         return ImageRawRpi5(array)
     else:
-        print("Create ImageRaw object for Raspberry Pi 4")
         return ImageRawRpi4(array)
+
+
+@jit(nopython=True)
+def bin2dBayer(a, K):
+    """
+    Perform 2D binning on a Bayer pattern array.
+
+    Args:
+        a (numpy.ndarray): Input Bayer pattern array.
+        K (int): Binning factor.
+
+    Returns:
+        numpy.ndarray: Binned array.
+    """
+    m_bins = a.shape[0]//K
+    n_bins = a.shape[1]//K
+    return a.reshape(m_bins, K, n_bins, K).sum(3).sum(1)
