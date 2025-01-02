@@ -129,6 +129,53 @@
             font-style: normal;
             font-size: 20px;
         }
+
+        .crop-info {
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+            box-shadow: 0px 2px 5px rgba(0, 0, 0, 0.1);
+            font-size: 14px;
+            min-width: 120px;
+        }
+
+        .crop-info span {
+            margin: 2px 0;
+        }
+
+        .adu-container {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .adu-box {
+            width: 150px;
+            height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: bold;
+            color: #fff;
+            border-radius: 5px;
+            box-shadow: 0px 2px 5px rgba(0, 0, 0, 0.2);
+        }
+
+        .adu-box.red {
+            background-color: red;
+        }
+
+        .adu-box.green {
+            background-color: green;
+        }
+
+        .adu-box.blue {
+            background-color: blue;
+        }
     </style>
 </head>
 <body>
@@ -187,12 +234,22 @@
     <!-- Conteneur des boutons Crop -->
     <h2>Contrôle du Crop</h2>
     <div id="crop-controls">
+        <div id="crop-info" class="crop-info">
+            <span>Crop Y: ---</span>
+            <span>Crop Height: ---</span>
+        </div>
         <button id="crop-up"><i>&#x2191;</i></button> <!-- Flèche vers le haut -->
         <button id="toggle-crop">Crop</button> <!-- Bouton texte "Crop" -->
         <button id="crop-down"><i>&#x2193;</i></button> <!-- Flèche vers le bas -->
     </div>
     <div id="live-view">
         <img id="live-image" src="" alt="Image en direct" style="max-width: 100%; border: 1px solid #000;">
+    </div>
+    <h1>Valeurs ADU</h1>
+    <div class="adu-container">
+        <div id="adu-red" class="adu-box red">---</div>
+        <div id="adu-green" class="adu-box green">---</div>
+        <div id="adu-blue" class="adu-box blue">---</div>
     </div>
     <h2>Graphique d'Intensité</h2>
     <div class="chart-container">
@@ -246,12 +303,14 @@
                 const data = await response.json();
                 responseText.textContent = JSON.stringify(data, null, 2);
                 console.log(`Réponse ${buttonLabel} :`, data);
+                updateCropInfo(data);
             } catch (error) {
                 console.error(`Erreur lors de l'action ${buttonLabel}:`, error);
                 responseText.textContent = `Erreur : ${error.message}`;
                 alert(`Erreur : Impossible d'effectuer ${buttonLabel}.`);
             }
         }
+        
         // Référencement de l'élément image
         const liveImage = document.getElementById("live-image");
         const responseText = document.getElementById("response-text");
@@ -445,7 +504,8 @@
                             liveImage.src = base64Image;
                             //updateLiveImage_base64(base64Image, liveImage);
                         }
-                    } else if (message.startsWith("intensity;#;")) {
+                    }
+                    else if (message.startsWith("intensity;#;")) {
                         const dataString = message.split(";#;")[1]; // Obtenir les valeurs après "intensity;#;"
                         const intensityValues = dataString.split(",").map(Number); // Convertir en tableau de nombres
 
@@ -455,7 +515,8 @@
 
                         // Rafraîchir le graphique
                         intensityChart.update();
-                    } else if (message.startsWith("spectrum;#;")) {
+                    }
+                    else if (message.startsWith("spectrum;#;")) {
                         const dataString = message.split(";#;")[1];
                         const spectrumValues = dataString.split(",").map(Number);
 
@@ -463,7 +524,17 @@
                         spectrumChart.data.datasets[0].data = spectrumValues;
                         spectrumChart.update();
                     }
-                } catch (error) {
+                    else if (message.startsWith("adu;#;")) {
+                        const parts = message.split(";#;");
+                        if (parts.length === 4) { // Vérifie qu'il y a bien trois valeurs après le préfixe
+                            // Mettre à jour les valeurs ADU
+                            document.getElementById("adu-red").textContent = parts[1];
+                            document.getElementById("adu-green").textContent = parts[2];
+                            document.getElementById("adu-blue").textContent = parts[3];
+                        }
+                    }
+                }
+                catch (error) {
                     console.error("Erreur lors du traitement du message:", error);
                 }
             });
@@ -699,7 +770,16 @@
             }
         }
         
-
+        // Fonction pour mettre à jour les informations de Crop
+        function updateCropInfo(data) {
+            const cropInfo = document.getElementById("crop-info");
+            const crop_y = data.crop_y || "---";
+            const crop_height = data.crop_height || "---";
+            cropInfo.innerHTML = `
+                <span>Crop Y: ${crop_y}</span>
+                <span>Crop Height: ${crop_height}</span>
+            `;
+        }
 
         document.getElementById("connect-button").addEventListener("click", connectCamera);
         document.getElementById("disconnect-button").addEventListener("click", disconnectCamera);
