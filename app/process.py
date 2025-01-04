@@ -5,6 +5,7 @@ import datetime
 import numpy as np
 from astropy.io import fits
 from Inti_recon import solex_proc 
+import traceback
 
 def process_scan(serfile, callback, dopcont=False, autocrop=True, autocrop_size=1100, noisereduction=False, dopplerShift=5, contShift=16, contSharpLevel=2, surfaceSharpLevel=2, proSharpLevel=1, offset=0):
     """
@@ -87,6 +88,7 @@ def process_scan(serfile, callback, dopcont=False, autocrop=True, autocrop_size=
         print("error solex proc", e)
         print(f"process_scan {serfile} failed")
         print(f"Traceback: {e}")
+        traceback.print_exc()
         # Call the callback function to indicate failure
         callback(serfile, 'failed')
 

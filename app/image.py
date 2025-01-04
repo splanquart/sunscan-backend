@@ -2,8 +2,8 @@ from abc import ABC
 
 import cv2
 import numpy as np
-from picamera2 import Picamera2, Platform
 from numba import jit
+from picamera2 import Picamera2, Platform
 
 class AbstractImageRaw12BitColor(ABC):
     def __init__(self, array: np.ndarray):
@@ -26,33 +26,14 @@ class AbstractImageRaw12BitColor(ABC):
     def channel_blue(self):
         return self._get_channel('_blue_channel', self.extract_blue_channel)
 
-    def convert_to_grayscale(self) -> np.ndarray:
+    def bin_2x2(self) -> np.ndarray:
         """
         Convert the image to a grayscale image using precomputed channels.
 
         Returns:
             numpy.ndarray: Converted grayscale image.
         """
-        red = self.channel_red()
-        green = self.channel_green()
-        blue = self.channel_blue()
-        
-        # Calculate the grayscale image using the average of the channels
-        grayscale = (red + green + blue) / 3
-        
-        return grayscale.astype(np.uint16)
-
-    def bin2d(self) -> np.ndarray:
-        """
-        Perform 2D binning on the image.
-
-        Args:
-            binning_factor (int): The binning factor.
-
-        Returns:
-            numpy.ndarray: Binned image.
-        """
-        return bin2dBayer(np.array(self.array), 2)
+        return bin2dBayer(np.array(self.array),2).astype(np.uint16)
 
     def to_rgb_16bit(self):
         """
@@ -76,16 +57,6 @@ class AbstractImageRaw12BitColor(ABC):
         blue_max = np.max(self.channel_blue())
         return (red_max, green_max, blue_max)
 
-    def clip_and_cast_to_16bit(self) -> np.ndarray:
-        """
-        Clip the values in the array to the range [0, 65535] and cast to uint16.
-
-        Returns:
-            numpy.ndarray: Clipped and casted array as uint16.
-        """
-        array = np.clip(self.array, 0, 65535)
-        return array.astype(np.uint16)
-
     def crop(self, crop_x: int, crop_y: int, crop_width: int, crop_height: int) -> 'AbstractImageRaw12BitColor':
         """
         Crop the image to the specified width and height.
@@ -100,6 +71,8 @@ class AbstractImageRaw12BitColor(ABC):
             AbstractImageRaw12BitColor: Cropped image.
         """
         return self.__class__(self.array[crop_y:crop_y+crop_height, crop_x:crop_x+crop_width])
+    
+
 class ImageRawRpi4(AbstractImageRaw12BitColor):
     def __init__(self, array: np.ndarray):
         super().__init__(array)
@@ -139,7 +112,7 @@ class ImageRawRpi5(AbstractImageRaw12BitColor):
         Returns:
             numpy.ndarray: Extracted red channel.
         """
-        return self.array[0::2, 0::2]
+        return self.array[1::2, 1::2]
     def extract_green_channel(self) -> np.ndarray:
         """
         Extract the green channel from the Bayer pattern array.
@@ -156,7 +129,7 @@ class ImageRawRpi5(AbstractImageRaw12BitColor):
         Returns:
             numpy.ndarray: Extracted blue channel.
         """
-        return self.array[1::2, 1::2]
+        return self.array[0::2, 0::2]
 
 def factory_image_raw(array: np.ndarray) -> AbstractImageRaw12BitColor:
     """
@@ -172,7 +145,7 @@ def factory_image_raw(array: np.ndarray) -> AbstractImageRaw12BitColor:
         return ImageRawRpi5(array)
     else:
         return ImageRawRpi4(array)
-
+    
 
 @jit(nopython=True)
 def bin2dBayer(a, K):
@@ -189,3 +162,6 @@ def bin2dBayer(a, K):
     m_bins = a.shape[0]//K
     n_bins = a.shape[1]//K
     return a.reshape(m_bins, K, n_bins, K).sum(3).sum(1)
+
+
+
