@@ -30,11 +30,12 @@ jobs:
             echo "IMGFILENAME=sunscan_os_${BRANCH}_${COMMIT}" >> $GITHUB_ENV
           fi
       - run: |
+          cp -r $GITHUB_WORKSPACE \${WORK_DIR}/tmp/repo
           {
           mkdir -p pi-gen-sunscan/01-prepare-repo
           cat > pi-gen-sunscan/01-prepare-repo/00-run.sh <<-EOF
           #!/bin/bash
-          git clone ${{ github.server_url }}/${{ github.repository }}.git --branch ${{ github.ref_name }} --depth 1 \${WORK_DIR}/tmp/repo
+          # git clone ${{ github.server_url }}/${{ github.repository }}.git --branch ${{ github.ref_name }} --depth 1 \${WORK_DIR}/tmp/repo
           
           EOF
           } &&
